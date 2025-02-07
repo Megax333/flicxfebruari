@@ -1,43 +1,28 @@
-import React, { useEffect } from 'react';
+import React from 'react';
 import { Reply, MoreHorizontal } from 'lucide-react';
 import { cn } from '../../utils/cn';
-import { useMessageStore } from '../../stores/messageStore';
-import { useAuth } from '../../context/AuthContext';
+import { User } from '@supabase/supabase-js';
+import { MessageWithProfile } from '../../types/message';
 
 interface MessageListProps {
-  contact: {
-    id: string;
-    name: string;
-    avatar: string;
-  };
+  messages: MessageWithProfile[];
+  user: User | null;
 }
 
-const MessageList = ({ contact }: MessageListProps) => {
-  const { user } = useAuth();
-  const { messages, loadMessages } = useMessageStore();
-  const conversationMessages = messages[contact.id] || [];
-
-  useEffect(() => {
-    loadMessages(contact.id);
-  }, [contact.id, loadMessages]);
+const MessageList = ({ messages, user }: MessageListProps) => {
+  if (!user) return null;
 
   return (
-    <div className="flex-1 overflow-y-auto py-4 px-4 bg-[#1E1E2A]">
-      {conversationMessages.length === 0 ? (
+    <div className="flex-1 overflow-y-auto py-4">
+      {messages.length === 0 ? (
         <div className="text-center text-gray-400 py-8">
-          Start a conversation with {contact.name}!
+          Send a message to start the conversation!
         </div>
       ) : (
-        conversationMessages.map((message, index) => {
+        messages.map((message, index) => {
           const isFirstInGroup = index === 0 || 
-            conversationMessages[index - 1]?.sender_id !== message.sender_id;
-          const isSender = message.sender_id === user?.id;
-          const avatar = isSender 
-            ? message.profiles?.avatar_url 
-            : message.receiver?.avatar_url || contact.avatar;
-          const username = isSender
-            ? message.profiles?.username
-            : message.receiver?.username || contact.name;
+            messages[index - 1]?.sender_id !== message.sender_id;
+          const isSender = message.sender_id === user.id;
 
           return (
             <div
@@ -50,8 +35,8 @@ const MessageList = ({ contact }: MessageListProps) => {
               <div className="flex items-start gap-3">
                 {isFirstInGroup && (
                   <img
-                    src={avatar}
-                    alt={username}
+                    src={message.sender.avatar_url || "/default-avatar.png"}
+                    alt={message.sender.username}
                     className="w-10 h-10 rounded-full mt-0.5"
                   />
                 )}
@@ -61,7 +46,7 @@ const MessageList = ({ contact }: MessageListProps) => {
                   {isFirstInGroup && (
                     <div className="flex items-baseline gap-2 mb-1">
                       <span className="font-medium text-[#5865f2] hover:underline cursor-pointer">
-                        {username}
+                        {message.sender.username}
                       </span>
                       <span className="text-xs text-gray-400">
                         {new Date(message.created_at).toLocaleTimeString()}
@@ -74,7 +59,6 @@ const MessageList = ({ contact }: MessageListProps) => {
                       {message.content}
                     </p>
 
-                    {/* Message Actions */}
                     <div className="absolute -top-4 -right-2 opacity-0 group-hover/message:opacity-100 transition-opacity flex items-center gap-0.5 bg-[#1E1E2A] border border-white/10 rounded-md shadow-lg z-10">
                       <button className="p-2 hover:bg-white/10 rounded-l-md">
                         <Reply size={16} />

@@ -1,10 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useProfile } from '../context/ProfileContext';
-import { MapPin, Link as LinkIcon, Calendar, Users, Check, Trophy, Star, ChevronRight, Heart, MessageCircle, Share2, Edit, Camera } from 'lucide-react';
+import { useAuth } from '../context/AuthContext';
+import { Users, Check, Trophy, Star, Heart, MessageCircle, Share2, Edit, Camera } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import CoinIcon from '../components/CoinIcon';
-import { useAuth } from '../context/AuthContext';
 
 interface Profile {
   id: string;
@@ -128,24 +128,39 @@ const ProfilePage = () => {
   const handleAvatarChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
     try {
       const file = event.target.files?.[0];
-      if (!file) return;
+      if (!file || !user?.id) return;
 
       setSavingProfile(true);
 
-      // Update profile directly with avatar URL
+      // Upload file to Supabase storage
+      const fileExt = file.name.split('.').pop();
+      const fileName = `${user.id}-${Math.random()}.${fileExt}`;
+      const filePath = `avatars/${fileName}`;
+
+      // Upload the file
+      const { error: uploadError } = await supabase.storage
+        .from('profiles')
+        .upload(filePath, file);
+
+      if (uploadError) throw uploadError;
+
+      // Get the public URL
+      const { data: { publicUrl } } = await supabase.storage
+        .from('profiles')
+        .getPublicUrl(filePath);
+
+      // Update profile with new avatar URL
       const { error: updateError } = await supabase
         .from('profiles')
-        .update({ 
-          avatar_url: `https://ui-avatars.com/api/?name=${encodeURIComponent(profile?.username || '')}&background=random&size=200`
-        })
-        .eq('id', user?.id);
+        .update({ avatar_url: publicUrl })
+        .eq('id', user.id);
 
       if (updateError) throw updateError;
 
       // Update local state
       setProfile(prev => prev ? {
         ...prev,
-        avatar_url: `https://ui-avatars.com/api/?name=${encodeURIComponent(prev.username)}&background=random&size=200`
+        avatar_url: publicUrl
       } : null);
 
     } catch (err) {
@@ -153,6 +168,26 @@ const ProfilePage = () => {
     } finally {
       setSavingProfile(false);
     }
+  };
+
+  const renderAvatarUpload = () => {
+    if (!profile || profile.id !== user?.id) return null;
+
+    return (
+      <label 
+        htmlFor="avatar-upload" 
+        className="absolute bottom-2 right-2 p-2 bg-purple-600 hover:bg-purple-700 rounded-full cursor-pointer transition-colors"
+      >
+        <Camera size={16} />
+        <input
+          id="avatar-upload"
+          type="file"
+          accept="image/*"
+          onChange={handleAvatarChange}
+          className="hidden"
+        />
+      </label>
+    );
   };
 
   if (loading) {
@@ -193,18 +228,7 @@ const ProfilePage = () => {
                   alt={profile.username}
                   className="w-36 h-36 rounded-full object-cover border-4 border-[#1E1E2A] relative z-10 group-hover:scale-105 transition-transform"
                 />
-                {user?.id === profile?.id && (
-                  <label className="absolute bottom-0 right-0 z-20 p-2 bg-purple-600 rounded-full cursor-pointer hover:bg-purple-700 transition-colors">
-                    <Camera size={16} />
-                    <input
-                      type="file"
-                      accept="image/*"
-                      className="hidden"
-                      onChange={handleAvatarChange}
-                      disabled={savingProfile}
-                    />
-                  </label>
-                )}
+                {renderAvatarUpload()}
               </div>
               
               {/* Profile Info */}

@@ -6,7 +6,7 @@ import { useProfile } from '../hooks/useProfile';
 import { useMissionStore } from '../stores/missionStore';
 import { useProfile as useProfileContext } from '../context/ProfileContext';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { useMessageStore } from '../stores/messageStore';
+import useMessageStore from '../stores/messageStore';
 
 interface SidebarItem {
   id: string;

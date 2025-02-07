@@ -62,18 +62,6 @@ export const AuthModal = ({ onClose, initialMode = 'login' }: AuthModalProps) =>
         if (!validateUsername(trimmedUsername)) {
           throw new Error('Username must be 3-20 characters and can only contain letters, numbers, underscores, and hyphens');
         }
-
-        // Check if username is available first
-        const { data: existingUser, error: checkError } = await supabase
-          .from('profiles')
-          .select('username')
-          .eq('username', trimmedUsername)
-          .maybeSingle();
-
-        if (checkError) throw checkError;
-        if (existingUser) {
-          throw new Error('Username is already taken. Please choose another.');
-        }
       }
 
       if (isLogin) {
@@ -88,59 +76,47 @@ export const AuthModal = ({ onClose, initialMode = 'login' }: AuthModalProps) =>
         setSuccess(true);
         setTimeout(() => onClose?.(), 800);
       } else {
-        // Handle signup with retries
-        let retryCount = 0;
-        const maxRetries = 3;
-        let lastError = null;
-
-        while (retryCount < maxRetries) {
-          try {
-            const { data, error: signUpError } = await supabase.auth.signUp({
-              email: trimmedEmail,
-              password: trimmedPassword,
-              options: {
-                data: {
-                  username: trimmedUsername,
-                  avatar_url: `https://ui-avatars.com/api/?name=${encodeURIComponent(trimmedUsername)}&background=random`
-                }
+        // Handle signup
+        try {
+          // Simple signup without retries
+          const { data: authData, error: signUpError } = await supabase.auth.signUp({
+            email: trimmedEmail,
+            password: trimmedPassword,
+            options: {
+              data: {
+                username: trimmedUsername
               }
-            });
-
-            if (signUpError) throw signUpError;
-            if (!data.user) throw new Error('No user data returned');
-
-            setSuccess(true);
-            setTimeout(() => onClose?.(), 800);
-            return;
-          } catch (err) {
-            lastError = err;
-            retryCount++;
-            
-            if (retryCount < maxRetries) {
-              // Wait before retrying with exponential backoff
-              await new Promise(resolve => setTimeout(resolve, Math.pow(2, retryCount) * 1000));
-              continue;
             }
-          }
-        }
+          });
 
-        // If we get here, all retries failed
-        throw lastError || new Error('Failed to create account after multiple attempts');
+          if (signUpError) throw signUpError;
+          if (!authData.user) throw new Error('No user data returned');
+
+          // Wait a moment for the trigger to complete
+          await new Promise(resolve => setTimeout(resolve, 1000));
+
+          setSuccess(true);
+          setTimeout(() => onClose?.(), 800);
+        } catch (err) {
+          console.error('Signup error details:', {
+            message: err.message,
+            details: err.details,
+            hint: err.hint,
+            code: err.code
+          });
+          throw err;
+        }
       }
     } catch (err) {
       console.error('Auth error:', err);
       
-      // Handle specific error cases
-      if (err.message?.includes('User already registered')) {
+      // Simplified error handling
+      if (err.message?.includes('already registered')) {
         setError('This email is already registered');
-      } else if (err.message === 'Invalid login credentials') {
+      } else if (err.message?.includes('Invalid login credentials')) {
         setError('Invalid email or password');
-      } else if (err.message?.includes('Username is already taken')) {
-        setError('Username is already taken. Please choose another.');
-      } else if (err.message?.includes('Database error')) {
-        setError('Error creating account. Please try again.');
       } else {
-        setError(err.message || 'An unexpected error occurred');
+        setError('Error creating account. Please try again and make sure your username is unique.');
       }
     } finally {
       setLoading(false);

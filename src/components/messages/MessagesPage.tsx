@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { Search, Plus, Settings, Phone, Video, Pin, Hash } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { Search, Settings, Phone, Video, Pin, Hash } from 'lucide-react';
 import MessageList from './MessageList';
 import MessageInput from './MessageInput';
 import UserDetailsPanel from './UserDetailsPanel';
@@ -7,17 +7,16 @@ import { cn } from '../../utils/cn';
 import { useAuth } from '../../context/AuthContext';
 import { supabase } from '../../lib/supabase';
 import { useNavigate, useParams } from 'react-router-dom';
-import { useMessageStore } from '../../stores/messageStore';
+import useMessageStore from '../../stores/messageStore';
 
 interface Contact {
   id: string;
-  name: string;
-  avatar: string;
-  status: 'online' | 'offline' | 'idle' | 'dnd';
-  lastMessage?: string;
-  timestamp?: string;
-  unread?: number;
-  typing?: boolean;
+  username: string;
+  avatar_url: string;
+  bio?: string;
+  status?: 'online' | 'offline' | 'idle' | 'dnd';
+  last_message?: string;
+  last_message_time?: string;
 }
 
 const MessagesPage = () => {
@@ -28,293 +27,269 @@ const MessagesPage = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [loading, setLoading] = useState(true);
-  const { subscribeToMessages, unsubscribeFromMessages, messages } = useMessageStore();
+  const { subscribeToMessages, messages, loadMessages, setActiveConversation, unreadCounts, loadUnreadCount } = useMessageStore();
 
   // Subscribe to messages
   useEffect(() => {
     if (user?.id) {
       subscribeToMessages(user.id);
-      return () => unsubscribeFromMessages();
+      loadUnreadCount(user.id);
     }
-  }, [user?.id, subscribeToMessages, unsubscribeFromMessages]);
+  }, [user?.id, subscribeToMessages, loadUnreadCount]);
 
-  // Load conversations
+  // Load conversations and contacts
   useEffect(() => {
     const loadConversations = async () => {
       if (!user?.id) return;
 
       try {
+        if (contacts.length === 0) {
+          setLoading(true);
+        }
+        
+        // First, get all messages to find unique conversations
         const { data: messageData, error: messageError } = await supabase
           .from('messages')
-          .select(`
-            id,
-            content,
-            created_at,
-            sender_id,
-            receiver_id,
-            profiles!messages_sender_id_fkey (
-              id,
-              username,
-              avatar_url
-            ),
-            receiver:profiles!messages_receiver_id_fkey (
-              id,
-              username,
-              avatar_url
-            )
-          `)
+          .select('sender_id, receiver_id')
           .or(`sender_id.eq.${user.id},receiver_id.eq.${user.id}`)
           .order('created_at', { ascending: false });
 
         if (messageError) throw messageError;
 
-        const contactMap = new Map<string, Contact>();
-        
+        // Get unique user IDs from conversations
+        const uniqueUserIds = new Set<string>();
         messageData?.forEach(msg => {
-          const otherUser = msg.sender_id === user.id ? msg.receiver : msg.profiles;
-          if (!otherUser) return;
-
-          if (!contactMap.has(otherUser.id)) {
-            contactMap.set(otherUser.id, {
-              id: otherUser.id,
-              name: otherUser.username,
-              avatar: otherUser.avatar_url || `https://ui-avatars.com/api/?name=${encodeURIComponent(otherUser.username)}&background=random`,
-              status: 'online',
-              lastMessage: msg.content,
-              timestamp: msg.created_at
-            });
-          }
+          const otherId = msg.sender_id === user.id ? msg.receiver_id : msg.sender_id;
+          uniqueUserIds.add(otherId);
         });
 
-        setContacts(Array.from(contactMap.values()));
-      } catch (err) {
-        console.error('Error loading conversations:', err);
+        // Get profile information for conversation participants
+        if (uniqueUserIds.size > 0) {
+          const { data: profiles, error: profilesError } = await supabase
+            .from('profiles')
+            .select('*')
+            .in('id', Array.from(uniqueUserIds));
+
+          if (profilesError) throw profilesError;
+
+          const contactList = profiles.map((profile: any) => ({
+            id: profile.id,
+            username: profile.username,
+            avatar_url: profile.avatar_url,
+            bio: profile.bio,
+            status: profile.status,
+            unreadCount: unreadCounts[profile.id] || 0
+          }));
+
+          setContacts(contactList);
+
+          // If username param exists, set the selected contact
+          if (username && !selectedContact) {
+            const contact = contactList.find(c => c.username === username);
+            if (contact) {
+              setSelectedContact(contact);
+              setActiveConversation(contact.id);
+              loadMessages(contact.id);
+            }
+          }
+        }
+      } catch (error) {
+        console.error('Error loading conversations:', error);
       } finally {
         setLoading(false);
       }
     };
 
     loadConversations();
-  }, [user?.id]);
+  }, [user?.id, username, loadMessages, setActiveConversation, unreadCounts]);
 
-  // Load initial contact from URL
-  useEffect(() => {
-    const loadInitialContact = async () => {
-      try {
-        if (username) {
-          await loadContact(username);
-        }
-        setLoading(false);
-      } catch (err) {
-        console.error('Error loading initial contact:', err);
-        setLoading(false);
-      }
-    };
-
-    loadInitialContact();
-  }, [username]);
-
-  const loadContact = async (username: string) => {
-    try {
-      const { data: profile, error } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('username', username)
-        .single();
-
-      if (error) throw error;
-
-      const contact: Contact = {
-        id: profile.id,
-        name: profile.username,
-        avatar: profile.avatar_url || `https://ui-avatars.com/api/?name=${encodeURIComponent(profile.username)}&background=random`,
-        status: 'online'
-      };
-
-      setContacts(prev => {
-        const exists = prev.find(c => c.id === contact.id);
-        if (!exists) {
-          return [...prev, contact];
-        }
-        return prev;
-      });
-      
-      setSelectedContact(contact);
-    } catch (err) {
-      console.error('Error loading contact:', err);
-      navigate('/messages');
-    }
+  const handleContactSelect = async (contact: Contact) => {
+    setSelectedContact(contact);
+    setActiveConversation(contact.id);
+    navigate(`/messages/${contact.username}`, { replace: true });
+    await loadMessages(contact.id);
   };
 
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'online': return 'bg-green-500';
-      case 'idle': return 'bg-yellow-500';
-      case 'dnd': return 'bg-red-500';
-      default: return 'bg-gray-500';
+  const handleSendMessage = async (content: string) => {
+    if (!selectedContact || !user) return;
+
+    try {
+      const optimisticId = `${Date.now()}-${Math.random()}`; // Unique ID for optimistic message
+      // Get current user's profile
+      const { data: userProfile } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', user.id)
+        .single();
+
+      // Optimistically add message to UI
+      const optimisticMessage = {
+        id: optimisticId,
+        content,
+        sender_id: user.id,
+        receiver_id: selectedContact.id,
+        created_at: new Date().toISOString(),
+        read: false,
+        sender: {
+          id: user.id,
+          username: userProfile?.username || user.email?.split('@')[0] || 'User',
+          avatar_url: userProfile?.avatar_url || '/default-avatar.png'
+        },
+        receiver: {
+          id: selectedContact.id,
+          username: selectedContact.username,
+          avatar_url: selectedContact.avatar_url || '/default-avatar.png'
+        }
+      };
+
+      // Add optimistic message to state
+      useMessageStore.setState(state => ({
+        messages: {
+          ...state.messages,
+          [selectedContact.id]: [...(state.messages[selectedContact.id] || []), optimisticMessage]
+        }
+      }));
+
+      // Actually send the message
+      const result = await useMessageStore.getState().sendMessage({
+        content,
+        receiver_id: selectedContact.id
+      });
+
+      if (result.error) {
+        // Remove optimistic message on error
+        useMessageStore.setState(state => ({
+          messages: {
+            ...state.messages,
+            [selectedContact.id]: state.messages[selectedContact.id]?.filter(m => m.id !== optimisticId) || []
+          }
+        }));
+        console.error('Error sending message:', result.error);
+      }
+    } catch (error) {
+      console.error('Error sending message:', error);
     }
   };
 
   const filteredContacts = contacts.filter(contact =>
-    contact.name.toLowerCase().includes(searchQuery.toLowerCase())
+    contact.username.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
-  if (!user) {
-    return (
-      <div className="h-screen pt-16 flex items-center justify-center">
-        <div className="text-center">
-          <h2 className="text-2xl font-bold mb-4">Sign in to access messages</h2>
-          <button
-            onClick={() => navigate('/')}
-            className="bg-purple-600 hover:bg-purple-700 px-6 py-2 rounded-full"
-          >
-            Go Home
-          </button>
-        </div>
-      </div>
-    );
-  }
-
-  if (loading) {
-    return (
-      <div className="h-screen pt-16 flex items-center justify-center">
-        <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-purple-600"></div>
-      </div>
-    );
-  }
-
   return (
-    <div className="h-screen pt-16 flex bg-[#1E1E2A]">
+    <div className="flex h-screen pt-16 overflow-hidden">
       {/* Contacts Sidebar */}
-      <div className="w-60 bg-[#1E1E2A] flex flex-col border-r border-white/10">
-        {/* Search Bar */}
-        <div className="p-2">
+      <div className="w-80 border-r border-[#1E1E2A] flex flex-col overflow-hidden">
+        <div className="p-4 border-b border-[#1E1E2A]">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-xl font-semibold">Messages</h2>
+            <button className="p-2 hover:bg-[#1E1E2A] rounded-lg">
+              <Settings size={20} />
+            </button>
+          </div>
           <div className="relative">
             <input
               type="text"
+              placeholder="Search messages"
+              className="w-full bg-[#1E1E2A] rounded-lg px-4 py-2 pl-10"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Find or start a conversation"
-              className="w-full bg-[#0A0A0F] text-sm rounded px-2 py-1 focus:outline-none"
             />
-            <Search size={14} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400" />
+            <Search className="absolute left-3 top-2.5 text-gray-400" size={18} />
           </div>
         </div>
 
-        {/* Direct Messages Header */}
-        <div className="px-2 py-3">
-          <button className="w-full flex items-center justify-between px-2 py-1 rounded hover:bg-white/5">
-            <span className="text-xs font-semibold text-gray-400 uppercase">Direct Messages</span>
-            <Plus size={16} className="text-gray-400" />
-          </button>
-        </div>
-
-        {/* Contact List */}
-        <div className="flex-1 overflow-y-auto space-y-0.5 px-2">
-          {filteredContacts.map((contact) => (
-            <button
-              key={contact.id}
-              onClick={() => setSelectedContact(contact)}
-              className={cn(
-                "w-full flex items-center gap-3 px-2 py-1.5 rounded-md group",
-                selectedContact?.id === contact.id 
-                  ? "bg-white/10" 
-                  : "hover:bg-white/5"
-              )}
-            >
-              <div className="relative flex-shrink-0">
-                <img
-                  src={contact.avatar}
-                  alt={contact.name}
-                  className="w-8 h-8 rounded-full"
-                />
-                <div className={cn(
-                  "absolute bottom-0 right-0 w-3 h-3 rounded-full border-2 border-[#1E1E2A]",
-                  getStatusColor(contact.status)
-                )} />
-              </div>
-
-              <div className="flex-1 min-w-0 text-left">
-                <div className="flex items-center justify-between">
-                  <span className={cn(
-                    "font-medium truncate",
-                    contact.unread ? "text-white" : "text-gray-300"
-                  )}>{contact.name}</span>
-                </div>
-                {contact.typing ? (
-                  <p className="text-xs text-emerald-400">typing...</p>
-                ) : contact.lastMessage && (
-                  <p className={cn(
-                    "text-xs truncate",
-                    contact.unread ? "text-gray-100" : "text-gray-400"
-                  )}>{contact.lastMessage}</p>
+        <div className="flex-1 overflow-y-auto">
+          {loading && contacts.length === 0 ? (
+            <div className="p-4 text-center text-gray-400">Loading conversations...</div>
+          ) : filteredContacts.length === 0 ? (
+            <div className="p-4 text-center text-gray-400">No conversations found</div>
+          ) : (
+            filteredContacts.map((contact) => (
+              <div
+                key={contact.id}
+                onClick={() => handleContactSelect(contact)}
+                className={cn(
+                  "p-4 hover:bg-[#1E1E2A] cursor-pointer",
+                  selectedContact?.id === contact.id && "bg-[#1E1E2A]"
                 )}
+              >
+                <div className="flex items-center gap-3">
+                  <img
+                    src={contact.avatar_url || "/default-avatar.png"}
+                    alt={contact.username}
+                    className="w-12 h-12 rounded-full"
+                  />
+                  <div className="flex-1">
+                    <h3 className="font-medium">{contact.username}</h3>
+                    {unreadCounts[contact.id] > 0 && (
+                      <span className="bg-blue-500 text-white text-xs px-2 py-1 rounded-full">
+                        {unreadCounts[contact.id]}
+                      </span>
+                    )}
+                  </div>
+                </div>
               </div>
-
-              {contact.unread && (
-                <span className="w-2 h-2 rounded-full bg-white" />
-              )}
-            </button>
-          ))}
-        </div>
-
-        {/* User Settings */}
-        <div className="p-2 bg-[#12121A] flex items-center gap-2">
-          <div className="relative">
-            <img
-              src={user?.user_metadata?.avatar_url || "https://ui-avatars.com/api/?background=random"}
-              alt="Your avatar"
-              className="w-8 h-8 rounded-full"
-            />
-            <div className="absolute bottom-0 right-0 w-3 h-3 rounded-full border-2 border-[#12121A] bg-green-500" />
-          </div>
-          <div className="flex-1 min-w-0">
-            <div className="text-sm font-medium truncate">{user?.user_metadata?.username || 'User'}</div>
-            <div className="text-xs text-gray-400">Online</div>
-          </div>
-          <button className="p-1 hover:bg-white/10 rounded">
-            <Settings size={16} className="text-gray-400" />
-          </button>
+            ))
+          )}
         </div>
       </div>
 
       {/* Chat Area */}
       {selectedContact ? (
-        <div className="flex flex-1">
-          <div className="flex-1 flex flex-col bg-[#1E1E2A]">
-            {/* Chat Header */}
-            <div className="h-12 px-4 flex items-center justify-between bg-[#1E1E2A] border-b border-white/10">
-              <div className="flex items-center gap-2">
-                <Hash size={24} className="text-gray-400" />
-                <h2 className="font-medium">{selectedContact.name}</h2>
-              </div>
-
-              <div className="flex items-center gap-2">
-                <button className="p-2 hover:bg-white/10 rounded-lg">
-                  <Phone size={20} className="text-gray-400" />
-                </button>
-                <button className="p-2 hover:bg-white/10 rounded-lg">
-                  <Video size={20} className="text-gray-400" />
-                </button>
-                <button className="p-2 hover:bg-white/10 rounded-lg">
-                  <Pin size={20} className="text-gray-400" />
-                </button>
+        <>
+          <div className="flex-1 flex flex-col overflow-hidden">
+            <div className="p-4 border-b border-[#1E1E2A]">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <img
+                    src={selectedContact.avatar_url || "/default-avatar.png"}
+                    alt={selectedContact.username}
+                    className="w-12 h-12 rounded-full"
+                  />
+                  <div>
+                    <h3 className="font-medium">{selectedContact.username}</h3>
+                    <p className="text-sm text-gray-400">
+                      {selectedContact.status || 'Active now'}
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button className="p-2 hover:bg-[#1E1E2A] rounded-lg">
+                    <Phone size={20} />
+                  </button>
+                  <button className="p-2 hover:bg-[#1E1E2A] rounded-lg">
+                    <Video size={20} />
+                  </button>
+                  <button className="p-2 hover:bg-[#1E1E2A] rounded-lg">
+                    <Pin size={20} />
+                  </button>
+                </div>
               </div>
             </div>
 
-            {/* Messages */}
-            <MessageList contact={selectedContact} />
-            <MessageInput contact={selectedContact} />
+            <div className="flex-1 overflow-y-auto p-4">
+              <MessageList
+                messages={messages[selectedContact.id] || []}
+                user={user}
+              />
+            </div>
+
+            <div className="p-4 border-t border-[#1E1E2A]">
+              <MessageInput onSendMessage={handleSendMessage} />
+            </div>
           </div>
-          
+
           {/* User Details Panel */}
           <UserDetailsPanel contact={selectedContact} />
-        </div>
+        </>
       ) : (
-        <div className="flex-1 flex items-center justify-center bg-[#1E1E2A] text-gray-400">
+        <div className="flex-1 flex items-center justify-center">
           <div className="text-center">
-            <h3 className="text-xl font-medium mb-2">Welcome to Messages!</h3>
-            <p className="text-sm">Select a conversation to start messaging</p>
+            <Hash size={48} className="mx-auto mb-4 text-gray-400" />
+            <h3 className="text-xl font-medium mb-2">Your Messages</h3>
+            <p className="text-gray-400">
+              Send private messages to a friend or group
+            </p>
           </div>
         </div>
       )}
