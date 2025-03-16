@@ -97,7 +97,7 @@ export const AuthModal = ({ onClose, initialMode = 'login' }: AuthModalProps) =>
 
           setSuccess(true);
           setTimeout(() => onClose?.(), 800);
-        } catch (err) {
+        } catch (err: { message?: string; details?: string; hint?: string; code?: string }) {
           console.error('Signup error details:', {
             message: err.message,
             details: err.details,
@@ -107,7 +107,7 @@ export const AuthModal = ({ onClose, initialMode = 'login' }: AuthModalProps) =>
           throw err;
         }
       }
-    } catch (err) {
+    } catch (err: { message?: string }) {
       console.error('Auth error:', err);
       
       // Simplified error handling

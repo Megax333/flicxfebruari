@@ -22,7 +22,6 @@ const MessageList = ({ messages, user }: MessageListProps) => {
         messages.map((message, index) => {
           const isFirstInGroup = index === 0 || 
             messages[index - 1]?.sender_id !== message.sender_id;
-          const isSender = message.sender_id === user.id;
 
           return (
             <div
