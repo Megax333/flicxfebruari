@@ -1,177 +1,204 @@
 import { create } from 'zustand';
 import { supabase } from '../lib/supabase';
+import { RealtimeChannel } from '@supabase/supabase-js';
 
-interface Message {
+export interface Message {
   id: string;
-  sender_id: string;
-  receiver_id: string;
   content: string;
   created_at: string;
+  sender_id: string;
+  receiver_id: string;
   read: boolean;
-}
-
-interface MessageWithProfile extends Message {
   profiles?: {
     id: string;
     username: string;
-    avatar_url: string;
+    avatar_url: string | null;
   };
   receiver?: {
     id: string;
     username: string;
-    avatar_url: string;
+    avatar_url: string | null;
   };
 }
 
 interface MessageStore {
-  messages: Record<string, MessageWithProfile[]>;
-  loading: boolean;
-  error: string | null;
-  unreadCount: number;
-  sendMessage: (receiverId: string, content: string) => Promise<void>;
+  messages: Message[];
+  unreadCounts: Record<string, number>;
+  messageSubscription: RealtimeChannel | null;
   loadMessages: (contactId: string) => Promise<void>;
-  markAsRead: (messageId: string) => Promise<void>;
+  sendMessage: (receiverId: string, content: string) => Promise<Message | null>;
+  markMessagesAsRead: (senderId: string) => Promise<void>;
   subscribeToMessages: (userId: string) => void;
   unsubscribeFromMessages: () => void;
-  loadUnreadCount: (userId: string) => Promise<void>;
+  getTotalUnreadCount: () => number;
 }
 
-export const useMessageStore = create<MessageStore>((set, get) => {
-  let subscription: any = null;
+export const useMessageStore = create<MessageStore>((set, get) => ({
+  messages: [],
+  unreadCounts: {},
+  messageSubscription: null,
 
-  return {
-    messages: {},
-    loading: false,
-    error: null,
-    unreadCount: 0,
+  getTotalUnreadCount: () => {
+    const { unreadCounts } = get();
+    return Object.values(unreadCounts).reduce((total, count) => total + count, 0);
+  },
 
-    sendMessage: async (receiverId: string, content: string) => {
-      try {
-        const { data: user } = await supabase.auth.getUser();
-        if (!user?.user?.id) throw new Error('Not authenticated');
-
-        const { data, error } = await supabase
-          .from('messages')
-          .insert([{
-            sender_id: user.user.id,
-            receiver_id: receiverId,
-            content,
-            read: false
-          }])
-          .select()
-          .single();
-
-        if (error) throw error;
-
-        // Update local messages
-        set(state => ({
-          messages: {
-            ...state.messages,
-            [receiverId]: [...(state.messages[receiverId] || []), data]
-          }
-        }));
-      } catch (err) {
-        console.error('Error sending message:', err);
-        set({ error: err.message });
+  loadMessages: async (contactId: string) => {
+    try {
+      // Get the current user first
+      const { data: userData, error: userError } = await supabase.auth.getUser();
+      if (userError || !userData.user) {
+        console.error('Error getting current user:', userError);
+        return;
       }
-    },
+      
+      const currentUserId = userData.user.id;
 
-    loadMessages: async (contactId: string) => {
-      set({ loading: true, error: null });
-      try {
-        const { data: user } = await supabase.auth.getUser();
-        if (!user?.user?.id) throw new Error('Not authenticated');
+      const { data: messages, error } = await supabase
+        .from('messages')
+        .select(`
+          *,
+          profiles!messages_sender_id_fkey (
+            id,
+            username,
+            avatar_url
+          ),
+          receiver:profiles!messages_receiver_id_fkey (
+            id,
+            username,
+            avatar_url
+          )
+        `)
+        .or(`and(sender_id.eq.${contactId},receiver_id.eq.${currentUserId}),and(sender_id.eq.${currentUserId},receiver_id.eq.${contactId})`)
+        .order('created_at');
 
-        const { data, error } = await supabase
-          .from('messages')
-          .select(`
-            *,
-            profiles!messages_sender_id_fkey (
-              id,
-              username,
-              avatar_url
-            ),
-            receiver:profiles!messages_receiver_id_fkey (
-              id,
-              username,
-              avatar_url
-            )
-          `)
-          .or(`and(sender_id.eq.${user.user.id},receiver_id.eq.${contactId}),and(sender_id.eq.${contactId},receiver_id.eq.${user.user.id})`)
-          .order('created_at', { ascending: true });
+      if (error) {
+        console.error('Error loading messages:', error);
+        return;
+      }
 
-        if (error) throw error;
+      set((state) => ({
+        messages: [...state.messages.filter(msg => 
+          !(msg.sender_id === contactId && msg.receiver_id === currentUserId) && 
+          !(msg.sender_id === currentUserId && msg.receiver_id === contactId)
+        ), ...messages]
+      }));
+    } catch (error) {
+      console.error('Error in loadMessages:', error);
+    }
+  },
 
-        // Mark messages as read
-        const unreadMessages = data?.filter(msg => 
-          msg.receiver_id === user.user.id && !msg.read
-        ) || [];
+  sendMessage: async (receiverId: string, content: string) => {
+    try {
+      const user = (await supabase.auth.getUser()).data.user;
+      if (!user) throw new Error('User not authenticated');
 
-        if (unreadMessages.length > 0) {
-          await supabase
-            .from('messages')
-            .update({ read: true })
-            .in('id', unreadMessages.map(msg => msg.id));
+      const newMessage = {
+        sender_id: user.id,
+        receiver_id: receiverId,
+        content,
+        read: false,
+      };
 
-          await get().loadUnreadCount(user.user.id);
+      const { data, error } = await supabase
+        .from('messages')
+        .insert(newMessage)
+        .select(`
+          *,
+          profiles!messages_sender_id_fkey (
+            id,
+            username,
+            avatar_url
+          ),
+          receiver:profiles!messages_receiver_id_fkey (
+            id,
+            username,
+            avatar_url
+          )
+        `)
+        .single();
+
+      if (error) {
+        console.error('Error sending message:', error);
+        return null;
+      }
+
+      // Add the new message to the store
+      set((state) => ({
+        messages: [...state.messages, data]
+      }));
+
+      return data;
+    } catch (error) {
+      console.error('Error in sendMessage:', error);
+      return null;
+    }
+  },
+
+  markMessagesAsRead: async (senderId: string) => {
+    try {
+      const user = (await supabase.auth.getUser()).data.user;
+      if (!user) throw new Error('User not authenticated');
+
+      const { error } = await supabase
+        .from('messages')
+        .update({ read: true })
+        .eq('sender_id', senderId)
+        .eq('receiver_id', user.id)
+        .eq('read', false);
+
+      if (error) {
+        console.error('Error marking messages as read:', error);
+        return;
+      }
+
+      // Update the messages in the store
+      set((state) => ({
+        messages: state.messages.map(msg => 
+          msg.sender_id === senderId && msg.receiver_id === user.id && !msg.read
+            ? { ...msg, read: true }
+            : msg
+        ),
+        unreadCounts: {
+          ...state.unreadCounts,
+          [senderId]: 0
         }
+      }));
+    } catch (error) {
+      console.error('Error in markMessagesAsRead:', error);
+    }
+  },
 
-        set(state => ({
-          messages: {
-            ...state.messages,
-            [contactId]: data || []
+  subscribeToMessages: (userId: string) => {
+    try {
+      // First, load initial unread counts
+      const loadUnreadCounts = async () => {
+        try {
+          // Using raw SQL query instead of the group method that's not in TypeScript definitions
+          const { data, error } = await supabase
+            .rpc('get_unread_message_counts', { p_user_id: userId });
+          
+          if (error) {
+            console.error('Error loading unread counts:', error);
+            return;
           }
-        }));
-      } catch (err) {
-        console.error('Error loading messages:', err);
-        set({ error: err.message });
-      } finally {
-        set({ loading: false });
-      }
-    },
-
-    loadUnreadCount: async (userId: string) => {
-      try {
-        const { count, error } = await supabase
-          .from('messages')
-          .select('*', { count: 'exact', head: true })
-          .eq('receiver_id', userId)
-          .eq('read', false);
-
-        if (error) throw error;
-        set({ unreadCount: count || 0 });
-      } catch (err) {
-        console.error('Error loading unread count:', err);
-      }
-    },
-
-    markAsRead: async (messageId: string) => {
-      try {
-        const { error } = await supabase
-          .from('messages')
-          .update({ read: true })
-          .eq('id', messageId);
-
-        if (error) throw error;
-
-        // Update unread count
-        const { data: user } = await supabase.auth.getUser();
-        if (user?.user?.id) {
-          await get().loadUnreadCount(user.user.id);
+          
+          const unreadCounts: Record<string, number> = {};
+          if (data) {
+            data.forEach((item: { sender_id: string; count: string }) => {
+              unreadCounts[item.sender_id] = parseInt(item.count);
+            });
+          }
+          
+          set({ unreadCounts });
+        } catch (err) {
+          console.error('Error in loadUnreadCounts:', err);
         }
-      } catch (err) {
-        console.error('Error marking message as read:', err);
-        set({ error: err.message });
-      }
-    },
+      };
+      
+      loadUnreadCounts();
 
-    subscribeToMessages: (userId: string) => {
-      if (subscription) return;
-
-      // Load initial unread count
-      get().loadUnreadCount(userId);
-
-      subscription = supabase
+      const subscription = supabase
         .channel('messages')
         .on(
           'postgres_changes',
@@ -182,29 +209,58 @@ export const useMessageStore = create<MessageStore>((set, get) => {
             filter: `receiver_id=eq.${userId}`
           },
           async (payload) => {
-            const newMessage = payload.new as Message;
-            const senderId = newMessage.sender_id;
+            // Fetch the complete message with profiles
+            const { data: message, error } = await supabase
+              .from('messages')
+              .select(`
+                *,
+                profiles!messages_sender_id_fkey (
+                  id,
+                  username,
+                  avatar_url
+                ),
+                receiver:profiles!messages_receiver_id_fkey (
+                  id,
+                  username,
+                  avatar_url
+                )
+              `)
+              .eq('id', payload.new.id)
+              .single();
 
-            // Update messages for this conversation
-            set(state => ({
-              messages: {
-                ...state.messages,
-                [senderId]: [...(state.messages[senderId] || []), newMessage]
-              }
-            }));
+            if (error) {
+              console.error('Error fetching new message:', error);
+              return;
+            }
 
-            // Update unread count
-            await get().loadUnreadCount(userId);
+            // Update messages and unread counts
+            set((state) => {
+              const senderId = message.sender_id;
+              const currentUnreadCount = state.unreadCounts[senderId] || 0;
+              
+              return {
+                messages: [...state.messages, message],
+                unreadCounts: {
+                  ...state.unreadCounts,
+                  [senderId]: currentUnreadCount + 1
+                }
+              };
+            });
           }
         )
         .subscribe();
-    },
 
-    unsubscribeFromMessages: () => {
-      if (subscription) {
-        subscription.unsubscribe();
-        subscription = null;
-      }
+      set({ messageSubscription: subscription });
+    } catch (error) {
+      console.error('Error in subscribeToMessages:', error);
     }
-  };
-});
+  },
+
+  unsubscribeFromMessages: () => {
+    const { messageSubscription } = get();
+    if (messageSubscription) {
+      messageSubscription.unsubscribe();
+      set({ messageSubscription: null });
+    }
+  }
+}));

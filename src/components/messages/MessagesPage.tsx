@@ -71,14 +71,17 @@ const MessagesPage = () => {
         const contactMap = new Map<string, Contact>();
         
         messageData?.forEach(msg => {
-          const otherUser = msg.sender_id === user.id ? msg.receiver : msg.profiles;
-          if (!otherUser) return;
+          // Determine if the other user is the sender or receiver
+          const otherUserId = msg.sender_id === user.id ? msg.receiver_id : msg.sender_id;
+          const otherUserProfile = msg.sender_id === user.id ? msg.receiver : msg.profiles;
+          
+          if (!otherUserProfile || !otherUserId) return;
 
-          if (!contactMap.has(otherUser.id)) {
-            contactMap.set(otherUser.id, {
-              id: otherUser.id,
-              name: otherUser.username,
-              avatar: otherUser.avatar_url || `https://ui-avatars.com/api/?name=${encodeURIComponent(otherUser.username)}&background=random`,
+          if (!contactMap.has(otherUserId)) {
+            contactMap.set(otherUserId, {
+              id: otherUserId,
+              name: otherUserProfile.username,
+              avatar: otherUserProfile.avatar_url || `https://ui-avatars.com/api/?name=${encodeURIComponent(otherUserProfile.username)}&background=random`,
               status: 'online',
               lastMessage: msg.content,
               timestamp: msg.created_at
@@ -301,7 +304,6 @@ const MessagesPage = () => {
                 </button>
               </div>
             </div>
-
             {/* Messages */}
             <MessageList contact={selectedContact} />
             <MessageInput contact={selectedContact} />

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Bell, X, Check } from 'lucide-react';
 import { useNotifications } from '../hooks/useNotifications';
 import { cn } from '../utils/cn';
@@ -24,10 +24,18 @@ const NotificationBell = () => {
     }
   };
 
+  // When the notification panel is opened, mark all as read
+  const handleOpenPanel = () => {
+    setIsOpen(!isOpen);
+    if (!isOpen && unreadCount > 0) {
+      handleMarkAllAsRead();
+    }
+  };
+
   return (
     <div className="relative">
       <button 
-        onClick={() => setIsOpen(!isOpen)}
+        onClick={handleOpenPanel}
         className="relative p-2 hover:bg-white/5 rounded-lg transition-colors group"
       >
         <Bell size={20} className="text-gray-400 group-hover:text-white transition-colors" />

@@ -5,6 +5,7 @@ import { useBalance } from '../../hooks/useBalance';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../context/AuthContext';
 import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 
 interface XCEPackage {
   id: string;
@@ -22,8 +23,8 @@ const WalletModal = ({ onClose }: WalletModalProps) => {
   const { balance, transactions, loading } = useBalance();
   const { user } = useAuth();
   const [packages, setPackages] = useState<XCEPackage[]>([]);
-  const [processingPayment, setProcessingPayment] = useState(false);
   const [paymentError, setPaymentError] = useState<string | null>(null);
+  const navigate = useNavigate();
 
   // Map package amounts to IDs
   const packageMap = {
@@ -50,50 +51,14 @@ const WalletModal = ({ onClose }: WalletModalProps) => {
     loadPackages();
   }, []);
 
-  const initializePayPalPayment = async (packageId: string) => {
+  const handlePurchase = (packageId: string) => {
     if (!user) return;
     
-    setProcessingPayment(true);
-    setPaymentError(null);
-
-    const pkg = packages.find(p => p.id === packageId);
-    if (!pkg) {
-      setPaymentError('Invalid package selected');
-      setProcessingPayment(false);
-      return;
-    }
-
-    try {
-      // Create payment order in our database
-      const { data: orderData, error: orderError } = await supabase.rpc('create_payment_order', {
-        p_user_id: user.id,
-        p_package_id: packageId,
-        p_paypal_order_id: null
-      });
-
-      if (orderError) throw orderError;
-
-      // Create PayPal order
-      const { data: paypalData, error: paypalError } = await supabase.functions.invoke('create-paypal-order', {
-        body: {
-          orderId: orderData,
-          packageId,
-          userId: user.id
-        }
-      });
-
-      if (paypalError) throw paypalError;
-
-      // Open PayPal checkout
-      window.open(`https://www.paypal.com/checkoutnow?token=${paypalData.orderID}`, '_blank');
-
-    } catch (error) {
-      console.error('Payment initialization error:', error);
-      setPaymentError('Unable to process payment. Please try again.');
-    } finally {
-      setProcessingPayment(false);
-    }
+    // Navigate to the payment page with the package ID
+    navigate(`/payment?packageId=${packageId}`);
+    onClose(); // Close the modal
   };
+
   const purchaseOptions = [
     { amount: 5, xce: 500 },
     { amount: 10, xce: 1100 },
@@ -128,7 +93,7 @@ const WalletModal = ({ onClose }: WalletModalProps) => {
             {/* Main Content */}
             <div className="p-6">
               {/* Balance Card */}
-              <div className="relative">
+              <div className="relative mb-6">
                 <div className="absolute inset-0 bg-gradient-to-br from-purple-600/20 to-blue-600/20 rounded-[40px] blur-[100px]" />
                 <div className="bg-[#2A2A3A] rounded-2xl p-8 relative overflow-hidden group border border-white/10">
                   <div className="absolute inset-0 bg-gradient-to-br from-purple-600/10 to-blue-600/10 opacity-0 group-hover:opacity-100 transition-all duration-500" />
@@ -168,6 +133,40 @@ const WalletModal = ({ onClose }: WalletModalProps) => {
                   </div>
                 </div>
               </div>
+
+              {/* Recent Transactions */}
+              <div className="space-y-1">
+                <h3 className="text-sm text-gray-400 mb-2">Recent Transactions</h3>
+                <div className="max-h-[180px] overflow-y-auto pr-2 custom-scrollbar">
+                  {loading ? (
+                    <div className="space-y-1">
+                      {[...Array(3)].map((_, i) => (
+                        <div key={i} className="h-10 bg-[#2A2A3A] animate-pulse rounded-lg" />
+                      ))}
+                    </div>
+                  ) : transactions.length > 0 ? (
+                    <div className="space-y-1">
+                      {transactions.map((tx) => (
+                        <div key={tx.id} className="bg-[#2A2A3A] py-2 px-3 rounded-lg flex items-center justify-between group hover:bg-[#3A3A4A] transition-colors text-sm">
+                          <div className="overflow-hidden">
+                            <div className="font-medium truncate max-w-[200px]">{tx.description}</div>
+                            <div className="text-xs text-gray-400">
+                              {new Date(tx.created_at).toLocaleDateString()}
+                            </div>
+                          </div>
+                          <div className={`font-medium whitespace-nowrap ${tx.amount > 0 ? 'text-green-400' : 'text-red-400'}`}>
+                            {tx.amount > 0 ? '+' : ''}{tx.amount} XCE
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="text-center text-gray-400 py-3 text-sm">
+                      No transactions yet
+                    </div>
+                  )}
+                </div>
+              </div>
             </div>
 
             {/* Purchase Options */}
@@ -179,12 +178,11 @@ const WalletModal = ({ onClose }: WalletModalProps) => {
                     onClick={() => {
                       const pkg = packages.find(p => p.price_usd === amount);
                       if (pkg) {
-                        initializePayPalPayment(pkg.id);
+                        handlePurchase(pkg.id);
                       } else {
                         setPaymentError('Package not found');
                       }
                     }}
-                    disabled={processingPayment}
                     key={amount}
                     className="w-full bg-[#2A2A3A] hover:bg-[#3A3A4A] p-4 rounded-xl transition-all group relative overflow-hidden border border-white/5 hover:border-purple-500/30"
                   >
@@ -223,38 +221,6 @@ const WalletModal = ({ onClose }: WalletModalProps) => {
                   <CoinIcon size={16} />
                   <span className="font-bold">100 XCE</span>
                 </div>
-              </div>
-
-              {/* Recent Transactions */}
-              <div className="mt-6 space-y-2">
-                <h3 className="text-sm text-gray-400 mb-3">Recent Transactions</h3>
-                {loading ? (
-                  <div className="space-y-2">
-                    {[...Array(3)].map((_, i) => (
-                      <div key={i} className="h-12 bg-[#2A2A3A] animate-pulse rounded-lg" />
-                    ))}
-                  </div>
-                ) : transactions.length > 0 ? (
-                  <div className="space-y-2">
-                    {transactions.map((tx) => (
-                      <div key={tx.id} className="bg-[#2A2A3A] p-3 rounded-lg flex items-center justify-between">
-                        <div>
-                          <div className="font-medium">{tx.description}</div>
-                          <div className="text-sm text-gray-400">
-                            {new Date(tx.created_at).toLocaleDateString()}
-                          </div>
-                        </div>
-                        <div className={`font-medium ${tx.amount > 0 ? 'text-green-400' : 'text-red-400'}`}>
-                          {tx.amount > 0 ? '+' : ''}{tx.amount} XCE
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="text-center text-gray-400 py-4">
-                    No transactions yet
-                  </div>
-                )}
               </div>
             </div>
           </div>

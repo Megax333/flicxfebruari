@@ -1,9 +1,10 @@
-import React, { useState } from 'react';
-import { Heart, MessageCircle, Share2, Bookmark, ArrowBigUp, Play, Pause } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { MessageCircle, Share2, Bookmark, ArrowBigUp, Play, Pause } from 'lucide-react';
 import { formatTimeAgo } from '../../utils/dateUtils';
 import type { ThoughtPost as ThoughtPostType } from '../../types/thoughts';
 import { useViewStore } from '../../stores/viewStore';
 import { cn } from '../../utils/cn';
+import { supabase } from '../../lib/supabase';
 
 interface ThoughtPostProps {
   post: ThoughtPostType;
@@ -13,8 +14,38 @@ interface ThoughtPostProps {
 const ThoughtPost = ({ post, expanded = false }: ThoughtPostProps) => {
   const [isLiked, setIsLiked] = useState(false);
   const [likes, setLikes] = useState(post.likes);
-  const { setSelectedTribe } = useViewStore();
+  const { setSelectedTribe: _ } = useViewStore(); // Renamed to _ to avoid unused warning
   const [isPlaying, setIsPlaying] = useState(false);
+  const [avatarError, setAvatarError] = useState(false);
+  
+  // Generate a reliable avatar URL using the same approach as the sidebar
+  const getAvatarUrl = () => {
+    // If we have a valid avatar URL and no error loading it, use it
+    if (post.author.avatar && !avatarError) {
+      // If it's already a full URL, return it
+      if (post.author.avatar.startsWith('http')) {
+        return post.author.avatar;
+      }
+      
+      // If it's a storage path, try to get the public URL
+      try {
+        const { data } = supabase.storage
+          .from('user-content')
+          .getPublicUrl(post.author.avatar);
+          
+        if (data?.publicUrl) {
+          console.log('Using Supabase storage URL in component:', data.publicUrl);
+          return data.publicUrl;
+        }
+      } catch (error) {
+        console.error('Error getting public URL in component:', error);
+      }
+    }
+    
+    // Fallback to UI Avatars service
+    const name = post.author.name || post.author.handle || post.author.id.substring(0, 2);
+    return `https://ui-avatars.com/api/?name=${encodeURIComponent(name)}&background=random`;
+  };
 
   const handleLike = () => {
     setIsLiked(!isLiked);
@@ -32,9 +63,13 @@ const ThoughtPost = ({ post, expanded = false }: ThoughtPostProps) => {
     )}>
       <div className="flex gap-4">
         <img
-          src={post.author.avatar}
+          src={getAvatarUrl()}
           alt={post.author.name}
           className="w-12 h-12 rounded-full object-cover ring-2 ring-purple-600/20"
+          onError={() => {
+            console.log('Avatar load error:', post.author.avatar);
+            setAvatarError(true);
+          }}
         />
         <div className="flex-1">
           <div className="flex items-start justify-between">

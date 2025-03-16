@@ -95,6 +95,14 @@ export const useNotifications = () => {
         .eq('id', notificationId);
 
       if (error) throw error;
+      
+      // Update local state immediately
+      setNotifications(prev => 
+        prev.map(n => n.id === notificationId ? { ...n, read: true } : n)
+      );
+      
+      // Decrement unread count
+      setUnreadCount(prev => Math.max(0, prev - 1));
     } catch (err) {
       console.error('Error marking notification as read:', err);
       throw err;
@@ -110,6 +118,14 @@ export const useNotifications = () => {
         .eq('read', false);
 
       if (error) throw error;
+      
+      // Update local state immediately
+      setNotifications(prev => 
+        prev.map(n => ({ ...n, read: true }))
+      );
+      
+      // Reset unread count to zero
+      setUnreadCount(0);
     } catch (err) {
       console.error('Error marking all notifications as read:', err);
       throw err;

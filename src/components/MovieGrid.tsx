@@ -1,17 +1,28 @@
-import React, { useRef, useState, useEffect } from 'react';
+import { useRef, useState, useEffect } from 'react';
 import { ChevronLeft, ChevronRight, Play } from 'lucide-react';
 import SeriesModal from './SeriesModal';
 import { useMovieStore } from '../stores/movieStore';
 
+// Define the Movie type interface
+interface Movie {
+  id: string;
+  title: string;
+  description: string;
+  thumbnail: string;
+  preview: string;
+  tags: string[];
+  // Add other properties as needed
+}
+
 const MovieGrid = () => {
   const fetchMovies = useMovieStore((state) => state.fetchMovies);
-  const videoRefs = useRef({});
+  const videoRefs = useRef<Record<string, HTMLVideoElement | null>>({});
   const [currentPage, setCurrentPage] = useState(0);
   const itemsPerPage = 6;
   const [activePreview, setActivePreview] = useState<string | null>(null);
   const [previewPosition, setPreviewPosition] = useState<'left' | 'right'>('left');
   const movies = useMovieStore((state) => state.movies);
-  const [content, setContent] = useState(movies);
+  const [content, setContent] = useState<Movie[]>(movies);
   const previewTimeoutRef = useRef<NodeJS.Timeout>();
 
   useEffect(() => {
@@ -46,7 +57,7 @@ const MovieGrid = () => {
 
   const handleVideoPlay = (id: string) => {
     if (videoRefs.current[id]) {
-      videoRefs.current[id].play();
+      videoRefs.current[id]?.play();
     }
   };
 
@@ -70,11 +81,11 @@ const MovieGrid = () => {
     }, 100);
   };
 
-  const navigateToSeries = (id: string) => {
-    setActiveMovie(content.find(movie => movie.id === id));
-  };
+  const [activeMovie, setActiveMovie] = useState<Movie | null>(null);
 
-  const [activeMovie, setActiveMovie] = useState(null);
+  const navigateToSeries = (id: string) => {
+    setActiveMovie(content.find(movie => movie.id === id) || null);
+  };
 
   const handleMouseLeave = (id: string) => {
     // Clear any pending preview timeout
@@ -87,8 +98,10 @@ const MovieGrid = () => {
       if (activePreview === id) {
         setActivePreview(null);
         if (videoRefs.current[id]) {
-          videoRefs.current[id].pause();
-          videoRefs.current[id].currentTime = 0;
+          videoRefs.current[id]?.pause();
+          if (videoRefs.current[id]) {
+            videoRefs.current[id]!.currentTime = 0;
+          }
         }
       }
     }, 100);

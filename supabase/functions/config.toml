@@ -1,0 +1,5 @@
+[functions]
+  runtime = "deno"
+
+[functions.create-payment-intent]
+  runtime = "deno"
